@@ -46,6 +46,7 @@ void Usage()
     printf( "          Defaults for all RAW conversion options are used\n" );
     printf( "          The output filename is the input name without an extension and \"-lr.tiff\" appended\n" );
     printf( "          A minimal Adobe .xmp file is created for the output image with Rating=1\n" );
+    printf( "          On Windows, tz.exe is invoked to attempt to enable ZIP compression on the TIFF file\n" );
     exit( 0 );
 } //Usage
 
@@ -62,32 +63,30 @@ const char * pcRating1XMP =
 
 int main( int ac, char * av[] )
 {
-    unique_ptr<LibRaw> RawProcessor( new LibRaw );
-  
     if ( 2 != ac )
       Usage();
   
     putenv( (char *) "TZ=UTC" ); // dcraw compatibility, affects TIFF datestamp field
-  
+
+    unique_ptr<LibRaw> RawProcessor( new LibRaw );
     RawProcessor->imgdata.params.output_tiff = 1;
     RawProcessor->imgdata.params.output_bps = 16;
   
     static char infn[ 1024 ];
     strcpy( infn, av[1] );
-  
     printf( "Processing file %s\n", infn );
   
-    int ret;
-  
-    if ( ( ret = RawProcessor->open_file( infn ) ) != LIBRAW_SUCCESS )
+    int ret = RawProcessor->open_file( infn );
+    if ( LIBRAW_SUCCESS != ret )
     {
-        printf( "can't open input file %s\n", infn );
+        printf( "error %#x == %d; can't open input file %s: %s\n", ret, ret, infn, libraw_strerror( ret ) );
         Usage();
     }
   
-    if ( ( ret = RawProcessor->unpack() ) != LIBRAW_SUCCESS )
+    ret = RawProcessor->unpack();
+    if ( LIBRAW_SUCCESS != ret )
     {
-        printf( "Cannot unpack %s: %s\n", infn, libraw_strerror( ret ) );
+        printf( "error %#x == %d; can't unpack %s: %s\n", ret, ret, infn, libraw_strerror( ret ) );
         Usage();
     }
   
@@ -95,7 +94,7 @@ int main( int ac, char * av[] )
   
     if ( LIBRAW_SUCCESS != ret )
     {
-        printf( "Cannot do pocessing on %s: %s\n", infn, libraw_strerror( ret ) );
+        printf( "error %#x == %d, can't do pocessing on %s: %s\n", ret, ret, infn, libraw_strerror( ret ) );
         Usage();
     }
 
@@ -121,29 +120,87 @@ int main( int ac, char * av[] )
     static char outfn[ 1024 ];
     strcpy( outfn, infn );
     char * dot = strrchr( outfn, '.' );
-    strcpy( dot, "-lr.tiff" );
-  
-    printf( "Writing file %s\n", outfn );
-  
-    if ( LIBRAW_SUCCESS != ( ret = RawProcessor->dcraw_ppm_tiff_writer( outfn ) ) )
+    if ( 0 == dot )
     {
-        printf( "Cannot write %s: %s\n", outfn, libraw_strerror( ret ) );
+        printf( "input filename doesn't have a file extension, which is required\n" );
         Usage();
     }
+
+    strcpy( dot, "-lr.tiff" );
+    printf( "Writing file %s\n", outfn );
   
+    ret = RawProcessor->dcraw_ppm_tiff_writer( outfn );
+    if ( LIBRAW_SUCCESS != ret )
+    {
+        printf( "error %#x == %d; can't write %s: %s\n", ret, ret, outfn, libraw_strerror( ret ) );
+        Usage();
+    }
+
+    RawProcessor->recycle_datastream();
     RawProcessor->recycle();
+    RawProcessor.reset( 0 );
 
     // Create a .xmp file with a rating of 1 so it's easier to find the image in Lightroom
 
-    dot = strrchr( outfn, '.' );
+    static char xmpfn[ 1024 ];
+    strcpy( xmpfn, outfn );
+    dot = strrchr( xmpfn, '.' );
     strcpy( dot, ".xmp" );
+    printf( "Writing xmp sidecar file %s\n", xmpfn );
 
-    FILE * fp = fopen( outfn, "w" );
+    FILE * fp = fopen( xmpfn, "w" );
     if ( fp )
     {
         fprintf( fp, "%s", pcRating1XMP );
         fclose( fp );
     }
-  
+    else
+        printf( "can't open the xmp file for writing\n" );
+
+#ifdef _MSC_VER // if on Windows, try to compress the tiff file
+
+    printf( "Attempting to compress the tiff file\n" );
+
+    STARTUPINFO si;
+    ZeroMemory( &si, sizeof si );
+    si.cb = sizeof si;
+
+    PROCESS_INFORMATION pi;
+    ZeroMemory( &pi, sizeof pi );
+
+    static char acProcess[ 1024 ];
+    sprintf( acProcess, "tz \"%s\"", outfn );
+
+    do
+    {
+        HANDLE hTmp = CreateFileA( outfn, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, 0 );
+
+        if ( INVALID_HANDLE_VALUE == hTmp )
+        {
+            // Wait for Defender / Indexer / etc. to let go of the file. This is silly, but happens quite often.
+
+            Sleep( 100 );
+            printf( "." );
+        }
+        else
+        {
+            CloseHandle( hTmp );
+            break;
+        }
+    } while( true );
+
+    BOOL ok = CreateProcessA( NULL, acProcess, 0, 0, FALSE, 0, 0, 0, &si, &pi );
+    if ( ok )
+    {
+        WaitForSingleObject( pi.hProcess, INFINITE );
+        CloseHandle( pi.hThread );
+        CloseHandle( pi.hProcess );
+        //printf( "Successfully invoked tz to compress the tiff file\n" );
+    }
+
+    printf( "Raw2Tif is complete\n" );
+
+#endif
+
     return 0;
 } //main
