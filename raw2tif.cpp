@@ -17,7 +17,7 @@
 
 #define LIBRAW_NO_WINSOCK2
 
-#ifdef _MSC_VER // this one change enabled buildin on an M1 Mac
+#ifdef _MSC_VER // this one change enabled building on an M1 Mac
 #include <windows.h>
 #endif
 
@@ -45,14 +45,26 @@ void Usage()
     printf( "  notes:  16-bit per channel uncompressed TIFF files are produced\n" );
     printf( "          Defaults for all RAW conversion options are used\n" );
     printf( "          The output filename is the input name without an extension and \"-lr.tiff\" appended\n" );
+    printf( "          A minimal Adobe .xmp file is created for the output image with Rating=1\n" );
     exit( 0 );
 } //Usage
+
+const char * pcRating1XMP =
+    R"(<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-c000 1.000000, 0000/00/00-00:00:00        ">)" "\n"
+    R"( <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">)"                                           "\n"
+    R"(  <rdf:Description rdf:about="")"                                                                              "\n"
+    R"(    xmlns:xmp="http://ns.adobe.com/xap/1.0/")"                                                                 "\n"
+    R"(   xmp:Rating="1")"                                                                                            "\n"
+    R"(  </rdf:Description>)"                                                                                         "\n"
+    R"( </rdf:RDF>)"                                                                                                  "\n"
+    R"(</x:xmpmeta>)"                                                                                                 "\n"
+    ;
 
 int main( int ac, char * av[] )
 {
     unique_ptr<LibRaw> RawProcessor( new LibRaw );
   
-    if (ac != 2)
+    if ( 2 != ac )
       Usage();
   
     putenv( (char *) "TZ=UTC" ); // dcraw compatibility, affects TIFF datestamp field
@@ -60,7 +72,7 @@ int main( int ac, char * av[] )
     RawProcessor->imgdata.params.output_tiff = 1;
     RawProcessor->imgdata.params.output_bps = 16;
   
-    char infn[ 1024 ];
+    static char infn[ 1024 ];
     strcpy( infn, av[1] );
   
     printf( "Processing file %s\n", infn );
@@ -81,9 +93,9 @@ int main( int ac, char * av[] )
   
     ret = RawProcessor->dcraw_process();
   
-    if (LIBRAW_SUCCESS != ret)
+    if ( LIBRAW_SUCCESS != ret )
     {
-        printf( "Cannot do postpocessing on %s: %s\n", infn, libraw_strerror( ret ) );
+        printf( "Cannot do pocessing on %s: %s\n", infn, libraw_strerror( ret ) );
         Usage();
     }
 
@@ -106,7 +118,7 @@ int main( int ac, char * av[] )
 
 #endif
   
-    char outfn[ 1024 ];
+    static char outfn[ 1024 ];
     strcpy( outfn, infn );
     char * dot = strrchr( outfn, '.' );
     strcpy( dot, "-lr.tiff" );
@@ -120,6 +132,18 @@ int main( int ac, char * av[] )
     }
   
     RawProcessor->recycle();
+
+    // Create a .xmp file with a rating of 1 so it's easier to find the image in Lightroom
+
+    dot = strrchr( outfn, '.' );
+    strcpy( dot, ".xmp" );
+
+    FILE * fp = fopen( outfn, "w" );
+    if ( fp )
+    {
+        fprintf( fp, "%s", pcRating1XMP );
+        fclose( fp );
+    }
   
     return 0;
 } //main
