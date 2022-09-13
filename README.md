@@ -15,3 +15,4 @@ Requires LibRaw to be cloned and built. https://github.com/LibRaw/LibRaw
       notes:  16-bit per channel uncompressed TIFF files are produced
               Defaults for all RAW conversion options are used
               The output filename is the input name without an extension and "-lr.tiff" appended
+              A minimal Adobe .xmp file is created for the output image with Rating=1
