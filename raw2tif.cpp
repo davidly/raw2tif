@@ -170,25 +170,6 @@ int main( int ac, char * av[] )
 
     static char acProcess[ 1024 ];
     sprintf( acProcess, "tz \"%s\"", outfn );
-
-    do
-    {
-        HANDLE hTmp = CreateFileA( outfn, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, 0 );
-
-        if ( INVALID_HANDLE_VALUE == hTmp )
-        {
-            // Wait for Defender / Indexer / etc. to let go of the file. This is silly, but happens quite often.
-
-            Sleep( 100 );
-            printf( "." );
-        }
-        else
-        {
-            CloseHandle( hTmp );
-            break;
-        }
-    } while( true );
-
     BOOL ok = CreateProcessA( NULL, acProcess, 0, 0, FALSE, 0, 0, 0, &si, &pi );
     if ( ok )
     {
