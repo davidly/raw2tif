@@ -17,7 +17,8 @@
 
 #define LIBRAW_NO_WINSOCK2
 
-#ifdef _MSC_VER // this one change enabled building on an M1 Mac
+#ifdef _MSC_VER
+#define UNICODE
 #include <windows.h>
 #endif
 
@@ -33,6 +34,15 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#endif
+
+#ifdef _MSC_VER
+#include <wrl.h>
+#include <comdef.h>
+#include <djl_tz.hxx>
+#pragma comment( lib, "ole32.lib" )
+#pragma comment( lib, "oleaut32.lib" )
+#pragma comment( lib, "windowscodecs.lib" )
 #endif
 
 using namespace std;
@@ -60,6 +70,61 @@ const char * pcRating1XMP =
     R"( </rdf:RDF>)"                                                                                                  "\n"
     R"(</x:xmpmeta>)"                                                                                                 "\n"
     ;
+
+#ifdef _MSC_VER
+
+CDJLTrace tracer;
+
+void ShowErrorAndExit( char * pcMessage, HRESULT hr = 0 )
+{
+    if ( S_OK == hr )
+    {
+        printf( "%s\n", pcMessage );
+    }
+    else
+    {
+        _com_error err( hr );
+        printf( "%s; error %#x == %ws\n", pcMessage, hr, err.ErrorMessage() );
+    }
+
+    exit( 1 );
+} //ShowErrorAndExit
+
+DWORD GetSize( WCHAR const * pwc )
+{
+    DWORD size = 0;
+
+    HANDLE h = CreateFile( pwc, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, 0 );
+
+    if ( INVALID_HANDLE_VALUE != h )
+    {
+        size = GetFileSize( h, 0 );
+        CloseHandle( h );
+    }
+
+    return size;
+} //GetSize
+
+void PrintNumberWithCommas( long long n )
+{
+    if ( n < 0 )
+    {
+        printf( "-" );
+        PrintNumberWithCommas( -n );
+        return;
+    }
+   
+    if ( n < 1000 )
+    {
+        printf( "%lld", n );
+        return;
+    }
+
+    PrintNumberWithCommas( n / 1000 );
+    printf( ",%03lld", n % 1000 );
+} //PrintNumberWithCommas
+
+#endif
 
 int main( int ac, char * av[] )
 {
@@ -91,7 +156,6 @@ int main( int ac, char * av[] )
     }
   
     ret = RawProcessor->dcraw_process();
-  
     if ( LIBRAW_SUCCESS != ret )
     {
         printf( "error %#x == %d, can't do pocessing on %s: %s\n", ret, ret, infn, libraw_strerror( ret ) );
@@ -161,27 +225,40 @@ int main( int ac, char * av[] )
 
     printf( "Attempting to compress the tiff file\n" );
 
-    STARTUPINFO si;
-    ZeroMemory( &si, sizeof si );
-    si.cb = sizeof si;
+    HRESULT hr = CoInitializeEx( NULL, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE );
+    if ( FAILED( hr ) )
+        ShowErrorAndExit( "can't coinitializeex", hr );
 
-    PROCESS_INFORMATION pi;
-    ZeroMemory( &pi, sizeof pi );
+    ComPtr<IWICImagingFactory> wicFactory;
+    hr = CoCreateInstance( CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, __uuidof( IWICImagingFactory ),
+                           reinterpret_cast<void **>  ( wicFactory.GetAddressOf() ) );
+    if ( FAILED( hr ) )
+        ShowErrorAndExit( "can't initialize wic", hr );
 
-    static char acProcess[ 1024 ];
-    sprintf( acProcess, "tz \"%s\"", outfn );
-    BOOL ok = CreateProcessA( NULL, acProcess, 0, 0, FALSE, 0, 0, 0, &si, &pi );
-    if ( ok )
-    {
-        WaitForSingleObject( pi.hProcess, INFINITE );
-        CloseHandle( pi.hThread );
-        CloseHandle( pi.hProcess );
-        //printf( "Successfully invoked tz to compress the tiff file\n" );
-    }
+    size_t converted = 0;
+    DWORD len = 1 + strlen( outfn );
+    WCHAR awcPath[ MAX_PATH ];
+    mbstowcs_s( &converted, awcPath, len, outfn, len );
+    DWORD sizeBefore = GetSize( awcPath );
 
-    printf( "Raw2Tif is complete\n" );
+    CTiffCompression tiffCompression;
+    hr = tiffCompression.CompressTiff( wicFactory, awcPath, 8 ); // 8 == zip
+    if ( FAILED( hr ) )
+        ShowErrorAndExit( "unable to set compression", hr );
+
+    DWORD sizeAfter = GetSize( awcPath );
+
+    printf( "original file size " );
+    PrintNumberWithCommas( sizeBefore );
+    printf( " new size " );
+    PrintNumberWithCommas( sizeAfter );
+    printf( "\n" );
+    
+    wicFactory.Reset();
+    CoUninitialize();
 
 #endif
 
+    printf( "Raw2Tif is complete\n" );
     return 0;
 } //main
